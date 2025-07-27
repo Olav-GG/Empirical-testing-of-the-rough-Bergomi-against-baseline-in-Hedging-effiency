@@ -1,4 +1,3 @@
-Read this:
+This master’s thesis, authored by Magnus Strand Harboe and Olav Gjerskvål Gilje, examines the hedging efficiency of the Rough Bergomi model compared to the Black–Scholes framework.
 
-This is a master thesis created by Magnus Strand Harboe and Olav Gjerskvål Gilje, which compares the hedging effciency between the rough bergomi and black and scholes. 
-The porpose of this is to see if using the rBergomi gives better risk management. While the model is more complex our theory is that better risk managment is worth it.
+The aim is to determine whether using the rBergomi model provides superior risk management. Although the model is more complex, our hypothesis is that the potential improvement in managing risk justifies the added complexity.
