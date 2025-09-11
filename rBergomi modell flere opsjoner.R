@@ -1,3 +1,12 @@
+M=10000
+N=1000
+alpha=-0.43
+H=alpha+1/2
+seed=1
+#xi0_level=(tail(VIX$PX_LAST, 1)/100)^2; xi0_level
+eta=1.9
+rho=-0.9
+
 simulate_Y_paths_hybrid_k1_v3 <- function(
     M, N, T, H, b = 0.5, seed = NULL, antithetic = FALSE,
     ncores = 1
@@ -46,16 +55,7 @@ simulate_Y_paths_hybrid_k1_v3 <- function(
     Y_list <- parallel::mclapply(seq_len(ncol(dW_mat)), conv_one, mc.cores = ncores)
     Y <- do.call(cbind, Y_list)
   } else if (ncores > 1 && .Platform$OS.type == "windows") {
-    # Windows: foreach/doParallel (valgfritt; kommenter inn om ??nskelig)
-    # requireNamespace("foreach"); requireNamespace("doParallel")
-    # cl <- parallel::makeCluster(ncores); doParallel::registerDoParallel(cl)
-    # Y <- foreach::foreach(m = seq_len(ncol(dW_mat)), .combine = 'cbind', .packages = "stats") %dopar% {
-    #   dW <- dW_mat[, m]; Z <- Z_mat[, m]
-    #   tail_conv <- as.numeric(stats::convolve(dW, rev(w_all), type = "open"))[1:N]
-    #   c1 * dW + c2 * Z + tail_conv
-    # }
-    # parallel::stopCluster(cl)
-    # Fallback til enkel lapply hvis du ikke vil trekke inn foreach/doParallel:
+    
     Y <- do.call(cbind, lapply(seq_len(ncol(dW_mat)), conv_one))
   } else {
     # Sekvensielt
@@ -115,11 +115,20 @@ idx_from_T <- function(T_vec, T_max, N) {
 }
 
 # Bygg v(t) = xi0 * exp(eta*Y + drift)  (flat forward-niv??)
-build_variance_paths <- function(sim, eta, xi0_level){
+#build_variance_paths <- function(sim, eta, xi0_level){
+#  t <- sim$t; H <- sim$H; N <- length(t); M <- ncol(sim$Y)
+#  drift <- -0.5 * eta^2 * (t^(2*H))
+#  xi_mat <- matrix(xi0_level, nrow=N, ncol=M)
+#  xi_mat * exp( eta * sim$Y + matrix(drift, nrow=N, ncol=M, byrow=FALSE) )
+#}
+
+
+build_variance_paths_curve <- function(sim, eta, xi0_curve) {
+  stopifnot(length(xi0_curve) == length(sim$t))
   t <- sim$t; H <- sim$H; N <- length(t); M <- ncol(sim$Y)
   drift <- -0.5 * eta^2 * (t^(2*H))
-  xi_mat <- matrix(xi0_level, nrow=N, ncol=M)
-  xi_mat * exp( eta * sim$Y + matrix(drift, nrow=N, ncol=M, byrow=FALSE) )
+  xi_mat <- matrix(xi0_curve, nrow = N, ncol = M)  # repliker kurven nedover kolonner
+  xi_mat * exp(eta * sim$Y + matrix(drift, nrow = N, ncol = M, byrow = FALSE))
 }
 
 # Simuler S og tapp ut S_T for mange modenheter i samme l??p
@@ -161,9 +170,9 @@ price_many_rB <- function(options_df, S0, r, q,
   T_vec <- sort(unique(df$T))
   T_max <- max(T_vec)
   H <- alpha + 0.5
-  sim <- simulate_Y_paths_hybrid_k1(M=M, N=N, T=T_max, H=H, seed=seed, antithetic=antithetic)
-  v_mat <- build_variance_paths(sim, eta, xi0_level)
-  xi0_0 <- xi0_level
+  sim <- simulate_Y_paths_hybrid_k1_v3(M=M, N=N, T=T_max, H=H, seed=seed, antithetic=antithetic)
+  v_mat <- build_variance_paths_curve(sim, eta, xi0_curve)  # <- bruk kurven
+  xi0_0 <- xi0_curve[1]       
   
   # 2) Hent S_T for alle T i ett pass
   T_idx <- idx_from_T(T_vec, T_max, N)
@@ -203,7 +212,8 @@ price_many_rB <- function(options_df, S0, r, q,
                  function(j) bs_implied_vol(P_iv[j], S=S0, K=K_vec[j], T=Tm, r=r, q=q, type=typ),
                  numeric(1))
     
-    data.frame(type=typ, K=K_vec, T=Tm, price=price, se=se, ci_lo=ci_lo, ci_hi=ci_hi, iv=iv)
+    data.frame(type=typ, K=K_vec, T=Tm, price=price, se=se, ci_lo=ci_lo, 
+               ci_hi=ci_hi, iv=iv, ST=ST)
   })
   
   res <- do.call(rbind, out)
@@ -214,11 +224,8 @@ price_many_rB <- function(options_df, S0, r, q,
 
 ## Prising + IV for hele options_df
 rb_res <- price_many_rB(options_df, S0, r, q,
-                        alpha=alpha, eta=eta, rho=Rho, xi0_level=xi0_level,
+                        alpha=alpha, eta=eta, rho=rho, xi0_level=xi0_level,
                         N=N, M=M, antithetic=TRUE, seed=seed)
 
-rb_res[rb_res$K == 1000 & rb_res$T == 1 & rb_res$type == "call", ]
-
-# Eksempel: alle T=1.0
-subset(rb_res, abs(T - 1.0) < 1e-12)
+mean(rb_res$ST)
 

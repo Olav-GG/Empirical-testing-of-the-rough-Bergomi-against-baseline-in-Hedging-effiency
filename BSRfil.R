@@ -150,3 +150,4 @@ subset(bs_res, T == 1.0)
 # Eksempel: ATM call (S0=K=1000, T=1, r=q=0) ??? fasit pris ??? 93.536155956
 subset(bs_res, abs(T-1)<1e-12 & K==1000)[, c("type","price")]
 subset(rb_res, abs(T - 1.0) < 1e-12)[, c("type","price")]
+

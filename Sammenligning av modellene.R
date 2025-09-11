@@ -1,91 +1,131 @@
-# install.packages("DT")  # <- kj??r ??n gang hvis du ikke har DT
+# 1) N??kkel for (type, K, T, maturity) fra options_df
+options_key <- options_df %>%
+  mutate(maturity = as.Date(start_date) + as.integer(round(T * day_count))) %>%
+  distinct(type, K, T, maturity)
+
+# 2) Siste markedspris per opsjon (bruker opt_long/opt_meta du allerede lagde)
+market_last <- opt_long %>%
+  filter(!is.na(last)) %>%
+  group_by(security) %>%
+  slice_max(order_by = date, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  transmute(
+    type     = tolower(type),                          # ensartet sm?? bokstaver
+    K        = as.numeric(dplyr::coalesce(K, strike)), # K hvis finnes, ellers strike
+    maturity = maturity,
+    mkt_last = last
+  )
+
+# 3) Sl?? sammen alt og regn ut feil + markeds-IV
+cmp <- options_key %>%
+  left_join(rb_res %>% select(type, K, T, price_rB = price, iv_rB = iv),
+            by = c("type","K","T")) %>%
+  left_join(bs_res %>% select(type, K, T, price_BS = price, iv_BS = iv),
+            by = c("type","K","T")) %>%
+  left_join(market_last, by = c("type","K","maturity")) %>%
+  mutate(
+    iv_mkt = ifelse(
+      is.na(mkt_last), NA_real_,
+      mapply(function(typ, KK, TT, P) bs_implied_vol(P, S = S0, K = KK, T = TT, r = r, q = q, type = typ),
+             type, K, T, mkt_last)
+    ),
+    err_rB_mkt = price_rB - mkt_last,
+    err_BS_mkt = price_BS - mkt_last,
+    rel_rB_mkt = (price_rB - mkt_last) / mkt_last,
+    rel_BS_mkt = (price_BS - mkt_last) / mkt_last
+  ) %>%
+  arrange(maturity, type, K)
+
+# 4) Oppsummering per forfall/type
+by_maturity_type <- cmp %>%
+  filter(!is.na(mkt_last)) %>%
+  group_by(maturity, T, type) %>%
+  summarise(
+    n        = n(),
+    MAE_rB   = mean(abs(err_rB_mkt)),
+    RMSE_rB  = sqrt(mean(err_rB_mkt^2)),
+    MAPE_rB  = mean(abs(rel_rB_mkt), na.rm = TRUE),
+    MAE_BS   = mean(abs(err_BS_mkt)),
+    RMSE_BS  = sqrt(mean(err_BS_mkt^2)),
+    MAPE_BS  = mean(abs(rel_BS_mkt), na.rm = TRUE),
+    .groups  = "drop"
+  ) %>%
+  arrange(maturity, type)
+
+# 5) Visning (bruker show_pretty hvis den finnes)
+if (exists("show_pretty")) {
+  show_pretty(cmp %>% select(maturity, T, type, K, mkt_last, price_rB, price_BS, iv_mkt, iv_rB, iv_BS,
+                             err_rB_mkt, err_BS_mkt, rel_rB_mkt, rel_BS_mkt),
+              title = "Market vs rB vs Black???Scholes", digits = 4)
+  show_pretty(by_maturity_type, title = "Feilm??l per forfall og type", digits = 4)
+} else {
+  print(head(cmp, 20))
+  print(by_maturity_type)
+}
+
+
 library(DT)
 
-# 1) Hjelper: legg kolonner i en ryddig rekkef??lge hvis de finnes
-.reorder_cols <- function(df, priority) {
-  keep <- intersect(priority, names(df))
-  rest <- setdiff(names(df), keep)
-  df[, c(keep, rest), drop = FALSE]
-}
+## --- 1) Market vs rB vs BS: pen tabell ---
+cmp_view <- cmp %>%
+  dplyr::select(maturity, T, type, K,
+                mkt_last, price_rB, price_BS,
+                iv_mkt, iv_rB, iv_BS,
+                err_rB_mkt, err_BS_mkt, rel_rB_mkt, rel_BS_mkt) %>%
+  dplyr::arrange(maturity, type, K)
 
-# 2) Hjelper: rund av tall kolonnevis (default = 6 desimaler)
-.round_numeric <- function(df, digits = 6) {
-  num <- vapply(df, is.numeric, logical(1))
-  df[num] <- lapply(df[num], function(x) round(x, digits))
-  df
-}
+num_cols <- names(cmp_view)[vapply(cmp_view, is.numeric, logical(1))]
 
-# 3) Hoved: vis pent i RStudio med DT (interaktivt), fallback til base::print
-show_pretty <- function(df, title = NULL, digits = 6) {
-  df <- .round_numeric(df, digits)
-  
-  # Fors??k ?? velge en god kolonnerekkef??lge ut fra hva som faktisk finnes
-  bs_order <- c("type","K","T","price","iv","delta","gamma","vega","theta","rho",
-                "d1","d2","Nd1","Nd2","lower","upper","in_bounds",
-                "se","ci_lo","ci_hi", "F0","disc","div","moneyness","option_id")
-  df <- .reorder_cols(df, bs_order)
-  
-  if ("datatable" %in% getNamespaceExports("DT")) {
-    dt <- datatable(
-      df,
-      rownames = FALSE,
-      caption = if (!is.null(title)) htmltools::tags$caption(style="caption-side: top; text-align:left;", title),
-      options = list(
-        pageLength = 15,
-        lengthMenu = c(10, 15, 25, 50, 100),
-        scrollX = TRUE,
-        autoWidth = TRUE,
-        dom = "tip"  # table + info + pagination (rent og pent)
-      )
-    )
-    
-    # Litt formatering hvis kolonner finnes
-    num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
-    if (length(num_cols)) dt <- DT::formatRound(dt, columns = num_cols, digits = digits)
-    if ("in_bounds" %in% names(df)) {
-      dt <- DT::formatStyle(
-        dt, "in_bounds",
-        backgroundColor = DT::styleEqual(c(TRUE, FALSE), c(NA, "#ffe6e6"))
-      )
-    }
-    return(dt)
-  }
-  
-  # Fallback uten DT
-  print(df)
-  invisible(df)
-}
+cmp_dt <- datatable(
+  cmp_view,
+  rownames = FALSE,
+  caption = htmltools::tags$caption(style="caption-side: top; text-align:left;",
+                                    "Market vs rB vs Black???Scholes"),
+  options = list(
+    pageLength = 15,
+    lengthMenu = c(10,15,25,50,100),
+    scrollX = TRUE,
+    autoWidth = TRUE,
+    dom = "tip"
+  )
+) %>%
+  DT::formatRound(columns = num_cols, digits = 4) %>%
+  # farge p?? signerte feil (gr??nn = modell under markedet, r??d = over)
+  DT::formatStyle(c("err_rB_mkt","err_BS_mkt","rel_rB_mkt","rel_BS_mkt"),
+                  color = DT::styleInterval(0, c("#2e7d32", "#c62828"))) %>%
+  # bar-heat p?? absolutt feil (bruker absoluttverdi for bredde)
+  DT::formatStyle("err_rB_mkt",
+                  background = DT::styleColorBar(abs(cmp_view$err_rB_mkt), "lightsteelblue"),
+                  backgroundSize = "98% 88%", backgroundRepeat = "no-repeat", backgroundPosition = "center") %>%
+  DT::formatStyle("err_BS_mkt",
+                  background = DT::styleColorBar(abs(cmp_view$err_BS_mkt), "lightsteelblue"),
+                  backgroundSize = "98% 88%", backgroundRepeat = "no-repeat", backgroundPosition = "center")
 
-# ---- Bruk: pene tabeller for BS og rB ----
-show_pretty(bs_res, title = "Black???Scholes (BS) ??? priser, greeks og IV")
-show_pretty(rb_res, title = "rBergomi (rB) ??? MC-priser, SE/CI og BS-implied vol")
+cmp_dt
 
+## --- 2) Oppsummering per forfall/type: pen tabell ---
+by_view <- by_maturity_type %>%
+  dplyr::arrange(maturity, type)
 
+by_num <- names(by_view)[vapply(by_view, is.numeric, logical(1))]
 
-## ---- sammenlign T ~ 1 ----
-tol <- 1e-8
-bs_T1 <- subset(bs_res, abs(T - 1) < tol, select = c(type, K, T, price))
-rb_T1 <- subset(rb_res, abs(T - 1) < tol, select = c(type, K, T, price))
+by_dt <- datatable(
+  by_view,
+  rownames = FALSE,
+  caption = htmltools::tags$caption(style="caption-side: top; text-align:left;",
+                                    "Feilm??l per forfall og type"),
+  options = list(
+    pageLength = 10,
+    lengthMenu = c(10,20,50),
+    scrollX = TRUE,
+    autoWidth = TRUE,
+    dom = "tip"
+  )
+) %>%
+  DT::formatRound(columns = by_num, digits = 4) %>%
+  # varm farge for h??y feilkost
+  DT::formatStyle(c("MAE_rB","RMSE_rB","MAPE_rB","MAE_BS","RMSE_BS","MAPE_BS"),
+                  background = DT::styleColorBar(by_view$RMSE_rB, "lavender"),
+                  backgroundSize = "98% 88%", backgroundRepeat = "no-repeat", backgroundPosition = "center")
 
-cmp_T1 <- merge(bs_T1, rb_T1, by = c("type","K","T"), suffixes = c("_BS","_rB"))
-cmp_T1$diff     <- cmp_T1$price_rB - cmp_T1$price_BS
-cmp_T1$pct_diff <- 100 * cmp_T1$diff / cmp_T1$price_BS
-cmp_T1 <- cmp_T1[order(cmp_T1$type, cmp_T1$K), ]
-
-# Vis pent (bruk show_pretty hvis du la den inn, ellers print)
-if (exists("show_pretty")) show_pretty(cmp_T1, title = "BS vs rB (T ??? 1 ??r)", digits = 4) else print(cmp_T1)
-
-
-## ---- generell sammenligner for hele griden ----
-compare_all <- function(bs_res, rb_res) {
-  b <- bs_res[, c("type","K","T","price")]
-  r <- rb_res[, c("type","K","T","price")]
-  out <- merge(b, r, by = c("type","K","T"), suffixes = c("_BS","_rB"))
-  out$diff     <- out$price_rB - out$price_BS
-  out$pct_diff <- 100 * out$diff / out$price_BS
-  out[order(out$T, match(out$type, c("call","put")), out$K), ]
-}
-
-cmp_all <- compare_all(bs_res, rb_res)
-if (exists("show_pretty")) show_pretty(cmp_all, title = "BS vs rB (alle forfall)", digits = 4) else print(cmp_all)
-
+by_dt
