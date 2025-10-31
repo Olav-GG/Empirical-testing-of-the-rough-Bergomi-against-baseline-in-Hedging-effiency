@@ -47,10 +47,51 @@ xi0_provider_default <- function(date_key, chain_df, r=0, q=0, VIX_level = NULL,
 ## ---------- 2) Curve scaling on [0, Delta] ----------
 # Multiply forward_var on [0, Delta] by a factor mu
 scale_xi0_on_interval <- function(xi0_df, Delta, mu) {
-  out <- xi0_df
-  if (Delta <= 0) return(out)
-  sel <- out$T_start < Delta  # left-closed scheme consistent with turbo-pricer
-  out$forward_var[sel] <- out$forward_var[sel] * mu
+  stopifnot(is.data.frame(xi0_df), all(c("T_start","T_end","forward_var") %in% names(xi0_df)))
+  if (Delta <= 0 || isTRUE(all.equal(mu, 1))) return(xi0_df)
+
+  tol <- 1e-12
+  pieces <- vector("list", length = nrow(xi0_df) * 2L)
+  k <- 0L
+
+  for (i in seq_len(nrow(xi0_df))) {
+    seg <- xi0_df[i, , drop = FALSE]
+    start <- seg$T_start
+    end   <- seg$T_end
+
+    if (start >= Delta - tol) {
+      k <- k + 1L; pieces[[k]] <- seg
+      next
+    }
+
+    if (end <= Delta + tol) {
+      seg$forward_var <- seg$forward_var * mu
+      k <- k + 1L; pieces[[k]] <- seg
+      next
+    }
+
+    # Segment straddles Delta: split so only [start, Delta) is scaled
+    left_len <- Delta - start
+    right_len <- end - Delta
+
+    if (left_len > tol) {
+      seg_left <- seg
+      seg_left$T_end <- Delta
+      seg_left$forward_var <- seg_left$forward_var * mu
+      k <- k + 1L; pieces[[k]] <- seg_left
+    }
+
+    if (right_len > tol) {
+      seg_right <- seg
+      seg_right$T_start <- Delta
+      k <- k + 1L; pieces[[k]] <- seg_right
+    }
+  }
+
+  if (k == 0L) return(xi0_df[0, , drop = FALSE])
+
+  out <- do.call(rbind, pieces[seq_len(k)])
+  rownames(out) <- NULL
   out
 }
 

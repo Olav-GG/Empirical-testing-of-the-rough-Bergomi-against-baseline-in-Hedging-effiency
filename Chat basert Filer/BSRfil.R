@@ -63,6 +63,9 @@ bs_implied_vol <- function(mkt_price, S, K, T, r, q, type = c("call", "put"),
   else                max(0, K * disc_r - S * disc_q)
   upper_bound <- if (type == "call") S * disc_q else K * disc_r
   if (mkt_price < lower_bound - 1e-12 || mkt_price > upper_bound + 1e-12) return(NA_real_)
+
+  if (abs(mkt_price - lower_bound) <= 1e-12) return(0)
+  if (abs(mkt_price - upper_bound) <= 1e-12) return(sigma_hi)
   f <- function(sigma) {
     if (sigma <= 0) return(lower_bound - mkt_price)  # force function negative if sigma=0
     sqrtT <- sqrt(T)

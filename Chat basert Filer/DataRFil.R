@@ -214,8 +214,16 @@ options_df <- options_df[is.finite(options_df$K) & is.finite(options_df$T) & opt
 # Prefer chain Fwd (already carried through) to compute ATM-ness.
 atm_by_T <- options_df_calib %>%
   group_by(T) %>%
-  slice_min(order_by = abs(K - unique(fwd)), n = 1, with_ties = FALSE) %>%
+  mutate(
+    fwd_ref = {
+      fwd_vals <- fwd[is.finite(fwd)]
+      if (length(fwd_vals)) median(fwd_vals)
+      else median(K[is.finite(K)], na.rm = TRUE)
+    }
+  ) %>%
+  slice_min(order_by = abs(K - fwd_ref), n = 1, with_ties = FALSE) %>%
   ungroup() %>%
+  select(-fwd_ref) %>%
   arrange(T) %>%
   mutate(total_var = (market_iv^2) * T)
 

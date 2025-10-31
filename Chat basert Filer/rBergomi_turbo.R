@@ -175,7 +175,7 @@ price_many_rB_turbo <- function(options_df, S0, r, q,
     if (!length(t_ids_here)) next
     
     # Conditional BS inputs common to all maturities hitting this step
-    A_base <- S0 * exp(-0.5 * I_acc + rho * J_acc)     # no dividend yet
+    A_base <- S0 * exp(-0.5 * rho^2 * I_acc + rho * J_acc)     # no dividend yet
     s2     <- (1 - rho^2) * I_acc
     
     for (tid in t_ids_here) {
