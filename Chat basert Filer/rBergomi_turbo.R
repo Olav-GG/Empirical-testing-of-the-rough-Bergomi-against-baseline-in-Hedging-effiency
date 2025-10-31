@@ -142,7 +142,12 @@ price_many_rB_turbo <- function(options_df, S0, r, q,
   # Simulate variance paths given xi0_vec
   v_mat <- build_variance_paths(sim, eta, xi0_vec)   # dimensions: N x M
   # v_prev[i,] = variance at *start* of step i (for i from 1 to N)
-  v_prev <- rbind(rep(xi0_vec[1], ncol(v_mat)), v_mat[1:(nrow(v_mat)-1), , drop = FALSE])
+  if (nrow(v_mat) == 1L) {
+    v_prev <- matrix(rep(xi0_vec[1], ncol(v_mat)), nrow = 1L)
+  } else {
+    v_prev <- rbind(rep(xi0_vec[1], ncol(v_mat)),
+                    v_mat[seq_len(nrow(v_mat) - 1L), , drop = FALSE])
+  }
   v_prev <- pmax(v_prev, 0)  # ensure non-negative variances
   
   # Precompute maturity indices and grouping of options by (type, T_id)
