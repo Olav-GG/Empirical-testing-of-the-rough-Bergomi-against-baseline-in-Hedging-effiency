@@ -50,11 +50,8 @@ simulate_Y_paths_hybrid_k1_v3 <- function(
     # Use mclapply on Unix/macOS
     Y_list <- parallel::mclapply(seq_len(ncol(dW_mat)), conv_one, mc.cores = ncores)
     Y <- do.call(cbind, Y_list)
-  } else if (ncores > 1 && .Platform$OS.type == "windows") {
-    # On Windows, mclapply is not available - fall back to lapply
-    Y <- do.call(cbind, lapply(seq_len(ncol(dW_mat)), conv_one))
   } else {
-    # Sequential
+    # On Windows mclapply is unavailable; fall back to the sequential lapply path
     Y <- do.call(cbind, lapply(seq_len(ncol(dW_mat)), conv_one))
   }
   
@@ -65,16 +62,8 @@ simulate_Y_paths_hybrid_k1_v3 <- function(
 build_variance_paths <- function(sim, eta, xi0_curve) {
   t <- sim$t; H <- sim$H
   N <- length(t); M <- ncol(sim$Y)
-  # Allow xi0_curve in three forms: scalar, vector (length N), or function f(t)
-  if (is.function(xi0_curve)) {
-    xi0_vec <- xi0_curve(t)
-  } else if (is.numeric(xi0_curve)) {
-    xi0_vec <- if (length(xi0_curve) == 1L) rep(xi0_curve, N) else xi0_curve
-  } else {
-    stop("xi0_curve must be a numeric scalar, numeric vector, or a function of t.")
-  }
-  stopifnot(length(xi0_vec) == N)
-  
+  xi0_vec <- make_xi0_vec(t, sim$dt, xi0_curve = xi0_curve, xi0_level = NULL)
+
   drift <- -0.5 * eta^2 * (t^(2*H))
   xi_mat <- matrix(xi0_vec, nrow = N, ncol = M)
   return(xi_mat * exp(eta * sim$Y + matrix(drift, nrow = N, ncol = M, byrow = FALSE)))
@@ -87,7 +76,33 @@ idx_from_T <- function(T_vec, T_max, N) {
   return(pmax(1L, pmin(N, as.integer(round(T_vec / dt)))))
 }
 
-ncores <- 4L
+make_xi0_vec <- function(t_grid, dt, xi0_curve, xi0_level) {
+  xi <- NULL
+  if (!is.null(xi0_curve)) {
+    if (is.data.frame(xi0_curve) && all(c("T_start", "T_end", "forward_var") %in% names(xi0_curve))) {
+      xi <- numeric(length(t_grid))
+      for (i in seq_along(t_grid)) {
+        t_start <- (i - 1) * dt
+        idx <- which(xi0_curve$T_start <= t_start & t_start < xi0_curve$T_end)
+        if (length(idx) == 0) idx <- nrow(xi0_curve)
+        xi[i] <- xi0_curve$forward_var[idx]
+      }
+    } else if (is.numeric(xi0_curve)) {
+      xi <- if (length(xi0_curve) == 1L) rep(xi0_curve, length(t_grid)) else xi0_curve
+    } else if (is.function(xi0_curve)) {
+      xi <- xi0_curve(t_grid)
+    } else {
+      stop("Unsupported xi0_curve type. Use data.frame(T_start,T_end,forward_var), numeric, or function.")
+    }
+  } else if (!is.null(xi0_level)) {
+    xi <- rep(xi0_level, length(t_grid))
+  }
+  if (is.null(xi)) stop("Provide either xi0_curve or xi0_level.")
+  if (length(xi) != length(t_grid)) {
+    stop("xi0 specification does not match simulation grid length.")
+  }
+  xi
+}
 
 
 # ---------- 3) Option pricing via turbo rough Bergomi ----------
@@ -116,33 +131,17 @@ price_many_rB_turbo <- function(options_df, S0, r, q,
   sim <- simulate_Y_paths_hybrid_k1_v3(M = M, N = N, T = T_max, H = H,
                                        seed = seed, antithetic = antithetic, ncores = ncores)
   # Build per-step variance process from xi0_curve or xi0_level
-  xi0_vec <- NULL
-  if (!is.null(xi0_curve)) {
-    if (is.data.frame(xi0_curve) && all(c("T_start","T_end","forward_var") %in% names(xi0_curve))) {
-      # Piecewise constant forward variance curve
-      xi0_vec <- numeric(length(sim$t))
-      dt <- sim$dt
-      for (i in seq_along(sim$t)) {
-        t_start <- (i - 1) * dt
-        idx <- which(xi0_curve$T_start <= t_start & t_start < xi0_curve$T_end)
-        if (length(idx) == 0) idx <- nrow(xi0_curve)  # if at final endpoint, use last segment
-        xi0_vec[i] <- xi0_curve$forward_var[idx]
-      }
-    } else if (is.numeric(xi0_curve)) {
-      xi0_vec <- if (length(xi0_curve) == 1L) rep(xi0_curve, length(sim$t)) else xi0_curve
-    } else {
-      stop("Unsupported xi0_curve type. Use data.frame(T_start,T_end,forward_var) or numeric vector.")
-    }
-  } else if (!is.null(xi0_level)) {
-    xi0_vec <- rep(xi0_level, length(sim$t))
-  } else {
-    stop("Provide either xi0_curve or xi0_level.")
-  }
+  xi0_vec <- make_xi0_vec(sim$t, sim$dt, xi0_curve = xi0_curve, xi0_level = xi0_level)
   
   # Simulate variance paths given xi0_vec
   v_mat <- build_variance_paths(sim, eta, xi0_vec)   # dimensions: N x M
   # v_prev[i,] = variance at *start* of step i (for i from 1 to N)
-  v_prev <- rbind(rep(xi0_vec[1], ncol(v_mat)), v_mat[1:(nrow(v_mat)-1), , drop = FALSE])
+  if (nrow(v_mat) == 1L) {
+    v_prev <- matrix(rep(xi0_vec[1], ncol(v_mat)), nrow = 1L)
+  } else {
+    v_prev <- rbind(rep(xi0_vec[1], ncol(v_mat)),
+                    v_mat[seq_len(nrow(v_mat) - 1L), , drop = FALSE])
+  }
   v_prev <- pmax(v_prev, 0)  # ensure non-negative variances
   
   # Precompute maturity indices and grouping of options by (type, T_id)
@@ -176,7 +175,7 @@ price_many_rB_turbo <- function(options_df, S0, r, q,
     if (!length(t_ids_here)) next
     
     # Conditional BS inputs common to all maturities hitting this step
-    A_base <- S0 * exp(-0.5 * I_acc + rho * J_acc)     # no dividend yet
+    A_base <- S0 * exp(-0.5 * rho^2 * I_acc + rho * J_acc)     # no dividend yet
     s2     <- (1 - rho^2) * I_acc
     
     for (tid in t_ids_here) {

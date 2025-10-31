@@ -107,7 +107,12 @@ K_round <- function(x) as.numeric(x)
 }
 
 options_df_calib <- .build_G1_df(options_raw)
-stopifnot(nrow(options_df_calib) == 30L)
+if (nrow(options_df_calib) < 5L) {
+  stop("Fewer than five calibration quotes survived the G1 filter; cannot calibrate reliably.")
+}
+if (nrow(options_df_calib) != 30L) {
+  warning(sprintf("Expected 30 G1 quotes; proceeding with %d available rows.", nrow(options_df_calib)))
+}
 
 # ---------- Markeds-ivs (BS) ----------
 options_df_calib$market_iv <- mapply(function(typ, K, T, P) {
@@ -120,7 +125,9 @@ options_df_calib <- options_df_calib %>%
   mutate(type = tolower(trimws(type)),
          K = K_round(K), T = T_round(T)) %>%
   arrange(T, match(type, c("call","put")), K)
-stopifnot(nrow(options_df_calib) == 30L)
+if (!nrow(options_df_calib)) {
+  stop("No finite calibration quotes remain after cleaning.")
+}
 
 cat("Kalibreringssett (G1) by bucket:\n")
 print(options_df_calib %>%

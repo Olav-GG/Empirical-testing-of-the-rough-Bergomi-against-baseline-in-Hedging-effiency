@@ -86,12 +86,21 @@ rb_diag <- function(H = NULL, eta = NULL,
   Ev_rel_err <- (Ev_emp - Ev_the) / pmax(Ev_the, 1e-16)
   
   # ---- 4) E[???_0^t v_s ds] ??? ???_0^t xi0(s) ds (venstre Riemann-sum som i pricer) ----
-  v_prev <- rbind(rep(xi0_vec[1], ncol(v_mat)), v_mat[1:(nrow(v_mat)-1), , drop = FALSE])
+  if (nrow(v_mat) == 1L) {
+    v_prev <- matrix(rep(xi0_vec[1], ncol(v_mat)), nrow = 1L)
+  } else {
+    v_prev <- rbind(rep(xi0_vec[1], ncol(v_mat)),
+                    v_mat[seq_len(nrow(v_mat) - 1L), , drop = FALSE])
+  }
   I_paths <- apply(v_prev, 2, function(col) cumsum(col) * dt)  # N x M
   EI_emp  <- rowMeans(I_paths)[i0:length(tgrid)]
   
   # venstresum av xi0 p?? samme skjema som v_prev:
-  xi_left <- c(xi0_vec[1], xi0_vec[1:(length(xi0_vec)-1)])
+  if (length(xi0_vec) == 1L) {
+    xi_left <- xi0_vec
+  } else {
+    xi_left <- c(xi0_vec[1], xi0_vec[seq_len(length(xi0_vec) - 1L)])
+  }
   I_the   <- cumsum(xi_left) * dt
   I_the   <- I_the[i0:length(tgrid)]
   EI_rel_err <- (EI_emp - I_the) / pmax(I_the, 1e-16)
@@ -212,11 +221,20 @@ rb_breakpoint_report <- function(H, eta, xi0_curve,
   v_mat   <- build_variance_paths(sim, eta = eta, xi0_curve = xi_vec) # N x M
   
   # For integraler bruker vi venstresum (som i turbo-priseren)
-  v_prev <- rbind(rep(xi_vec[1], ncol(v_mat)), v_mat[1:(nrow(v_mat)-1), , drop = FALSE])
+  if (nrow(v_mat) == 1L) {
+    v_prev <- matrix(rep(xi_vec[1], ncol(v_mat)), nrow = 1L)
+  } else {
+    v_prev <- rbind(rep(xi_vec[1], ncol(v_mat)),
+                    v_mat[seq_len(nrow(v_mat) - 1L), , drop = FALSE])
+  }
   I_paths <- apply(v_prev, 2, function(col) cumsum(col) * dt)
   EI_emp  <- rowMeans(I_paths)
   
-  xi_left <- c(xi_vec[1], xi_vec[1:(length(xi_vec)-1)])
+  if (length(xi_vec) == 1L) {
+    xi_left <- xi_vec
+  } else {
+    xi_left <- c(xi_vec[1], xi_vec[seq_len(length(xi_vec) - 1L)])
+  }
   I_the   <- cumsum(xi_left) * dt
   
   # Breakpoints = T_end (dropp duplikater og T=0)

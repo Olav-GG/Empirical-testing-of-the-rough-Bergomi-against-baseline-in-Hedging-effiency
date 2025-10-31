@@ -228,8 +228,9 @@ preprice_rb_for_date <- function(d, chain_raw, r, q, H, Rho, Eta, N=500L, M=1000
     date=d, H=H, Rho=Rho, Eta=Eta, N=N, M=M, seed=seed_i,
     S0=S0_today, r=r, q=q, xi0_digest = digest(xi0_curve_today)
   )
-  
+
   key <- .cache_key(d, H, Rho, Eta, N, M, seed_i, S0_today, r, q, xi0_curve_today)
+  meta$cache_key <- key
   assign(key, list(prices = rB_tbl, meta = meta), envir = .rB_cache)
   
   invisible(list(prices=rB_tbl, meta=meta, key=key))
@@ -242,27 +243,39 @@ get_rb_prices <- function(d, wanted_df, chain_raw, r, q, H, Rho, Eta, N=500L, M=
   keys <- ls(.rB_cache, all.names = TRUE)
   cand <- grep(paste0("^", d, "\\|"), keys, value = TRUE)
   
-  pick <- function() {
-    if (!length(cand)) return(NULL)
-    # pick the last inserted candidate
-    get(tail(cand, 1), envir = .rB_cache)
+  entry <- NULL
+  entry_key <- NULL
+  if (length(cand)) {
+    for (k in rev(cand)) {
+      candidate <- get(k, envir = .rB_cache)
+      if (!is.null(candidate)) {
+        entry <- candidate
+        entry_key <- k
+        break
+      }
+    }
   }
-  
-  entry <- pick()
+
+  if (!is.null(entry) && !is.null(entry$meta) && is.null(entry$meta$cache_key)) {
+    entry$meta$cache_key <- entry_key
+  }
   
   # If not found or params mismatch, build afresh
   needs_rebuild <- is.null(entry) ||
     is.null(entry$meta) ||
     any(abs(c(entry$meta$H, entry$meta$Rho, entry$meta$Eta) - c(H,Rho,Eta)) > 1e-12) ||
     entry$meta$N != N || entry$meta$M != M || entry$meta$r != r || entry$meta$q != q
-  
+
   if (needs_rebuild) {
     pre <- preprice_rb_for_date(
       d, chain_raw, r, q, H, Rho, Eta, N, M, seed_base, extend_to
     )
     if (is.null(pre)) return(NULL)
-    entry <- get(pre$key, envir = .rB_cache)
+    entry_key <- pre$key
+    entry <- get(entry_key, envir = .rB_cache)
   }
+
+  if (is.null(entry_key)) entry_key <- entry$meta$cache_key
   
   # Join cached prices
   wanted_df <- wanted_df %>% mutate(type=tolower(trimws(type)), K=as.numeric(K), T=T_round(T))
@@ -300,8 +313,9 @@ get_rb_prices <- function(d, wanted_df, chain_raw, r, q, H, Rho, Eta, N=500L, M=
     # update cache and output
     updated <- bind_rows(entry$prices, extra) %>% distinct(type,K,T,.keep_all=TRUE)
     entry$prices <- updated
-    assign(ls(envir=.rB_cache, pattern=paste0("^", d, "\\|")) |> tail(1), entry, envir=.rB_cache)
-    
+    entry$meta$cache_key <- entry_key
+    assign(entry_key, entry, envir = .rB_cache)
+
     out <- wanted_df %>% left_join(updated, by=c("type","K","T"))
   }
   
